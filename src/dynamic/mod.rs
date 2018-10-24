@@ -1,13 +1,17 @@
+use rayon::prelude::*;
+
+pub trait RecordT : Clone + Send + Sync {}
+
 /// DataFrame type.
 ///
 /// Holds a collection of your `Records`.
 #[derive(Debug)]
-pub struct DataFrame<Record: Clone>
+pub struct DataFrame<Record: RecordT>
 {
     rows: Vec<Record>,
 }
 
-impl<Record: Clone> DataFrame<Record>
+impl<Record: RecordT> DataFrame<Record>
 {
     /// Create an empty dataframe.
     pub fn new() -> Self
@@ -26,26 +30,26 @@ impl<Record: Clone> DataFrame<Record>
 
     /// Return subset of the columns in `self`.
     pub fn select
-        <NewRecord: Clone,
-        Selector: Fn(Record) -> NewRecord>
+        <NewRecord: RecordT,
+        Selector: Send + Sync + Fn(Record) -> NewRecord>
         (&self, s: Selector) -> DataFrame<NewRecord>
     {
         DataFrame
         {
-            rows: self.rows.iter().cloned().map(s).collect()
+            rows: self.rows.par_iter().cloned().map(s).collect()
         }
     }
 
     /// Return subset of rows in `self` which satisfy predicate against `other`.
     pub fn lookup
-        <OtherRecord: Clone,
-        Predicate: Fn(&Record, &OtherRecord) -> bool>
+        <OtherRecord: RecordT,
+        Predicate: Send + Sync + Fn(&Record, &OtherRecord) -> bool>
         (&self, other: &DataFrame<OtherRecord>, p: Predicate) -> DataFrame<Record>
     {
         DataFrame
         {
-            rows: self.rows.iter()
-                .zip(other.rows.iter())
+            rows: self.rows.par_iter()
+                .zip(other.rows.par_iter())
                 .filter_map(|(s,o)|
                 {
                     if p(s, o) { Some(s.clone()) }
@@ -65,10 +69,10 @@ impl<Record: Clone> DataFrame<Record>
         op: Operation
     ) -> DataFrame<NewRecord>
     where
-        OtherRecord: Clone,
-        NewRecord:   Clone,
-        Predicate:   Fn(&Record, &OtherRecord) -> bool,
-        Operation:   Fn(&Record, &OtherRecord) -> NewRecord,
+        OtherRecord: RecordT,
+        NewRecord:   RecordT,
+        Predicate:   Send + Sync + Fn(&Record, &OtherRecord) -> bool,
+        Operation:   Send + Sync + Fn(&Record, &OtherRecord) -> NewRecord,
     {
         DataFrame
         {
@@ -85,34 +89,34 @@ impl<Record: Clone> DataFrame<Record>
 
     /// Return subset of rows in `other` which satisfy predicate against `self`.
     pub fn reverse_lookup
-        <OtherRecord: Clone,
-        Predicate: Fn(&OtherRecord, &Record) -> bool>
+        <OtherRecord: RecordT,
+        Predicate: Send + Sync + Fn(&OtherRecord, &Record) -> bool>
         (&self, other: &DataFrame<OtherRecord>, p: Predicate) -> DataFrame<OtherRecord>
     {
         other.lookup(self, p)
     }
 
     /// Create or alter records using `Op`.
-    pub fn mutate<NewRecord: Clone, Op: Fn(Record) -> NewRecord>
+    pub fn mutate<NewRecord: RecordT, Op: Send + Sync + Fn(Record) -> NewRecord>
         (&self, op: Op) -> DataFrame<NewRecord>
     {
         DataFrame
         {
-            rows: self.rows.iter().cloned().map(op).collect()
+            rows: self.rows.par_iter().cloned().map(op).collect()
         }
     }
 
     /// Return subset of rows that satisfy predicate.
-    pub fn filter<Predicate: Fn(&Record) -> bool>(&self, p: Predicate) -> DataFrame<Record>
+    pub fn filter<Predicate: Send + Sync + Fn(&Record) -> bool>(&self, p: Predicate) -> DataFrame<Record>
     {
         DataFrame
         {
-            rows: self.rows.iter().filter(|&i| p(i)).cloned().collect()
+            rows: self.rows.par_iter().filter(|&i| p(i)).cloned().collect()
         }
     }
 }
 
-impl<Record: Clone> Extend<Record> for DataFrame<Record>
+impl<Record: RecordT> Extend<Record> for DataFrame<Record>
 {
     fn extend<T: IntoIterator<Item=Record>>(&mut self, iter: T)
     {
@@ -137,6 +141,8 @@ mod test
             name: String,
         }
 
+        impl super::RecordT for Record {};
+
         type DataFrame = super::DataFrame<Record>;
 
         let mut df = DataFrame::new();
@@ -156,7 +162,8 @@ mod test
 
         println!("{:?}", df);
 
-        println!("{:?}", df.mutate(|mut r| { r.foo = 2.0*r.foo; r }))
+        println!("{:?}", df.mutate(|mut r| { r.foo = 2.0*r.foo; r }));
+        println!("{:?}", df.filter(|r| r.name == "name"));
     }
 }
 
