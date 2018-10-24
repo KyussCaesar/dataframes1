@@ -1,395 +1,162 @@
-//! DataFrame: Dynamic.
-//!
-//! Everything checked at runtime.
-
-use std::collections::HashMap;
-use std::iter::Extend;
-use self::error_string::ErrorString;
-
-/// Represents a column in the dataframe.
-#[derive(Debug, Clone)]
-enum Column
-{
-    Float(Vec<f32>),
-    Double(Vec<f64>),
-    Factor(Vec<String>),
-    Bool(Vec<bool>),
-}
-
-impl Column
-{
-    /// Return the number of elements in the column.
-    fn len(&self) -> usize
-    {
-        use self::Column::*;
-        match self
-        {
-            &Float(ref v)  => v.len(),
-            &Double(ref v) => v.len(),
-            &Factor(ref v) => v.len(),
-            &Bool(ref v)   => v.len(),
-        }
-    }
-
-    /// Return the type of this column, as a str.
-    fn variant_str(&self) -> &'static str
-    {
-        use self::Column::*;
-        match self
-        {
-            &Float(_)  => "Float",
-            &Double(_) => "Double",
-            &Factor(_) => "Factor",
-            &Bool(_)   => "Boolean",
-        }
-    }
-}
-
-/// A dataframe.
-#[derive(Clone)]
-pub struct DataFrame
-{
-    columns: HashMap<String, Column>,
-    nrow: usize,
-}
-
-/// Errors.
+/// DataFrame type.
 ///
-/// # TODOs
-///
-/// Replace uses of the general error with more specific ones.
+/// Holds a collection of your `Records`.
 #[derive(Debug)]
-pub enum Error
+pub struct DataFrame<Record: Clone>
 {
-    /// General error.
-    General(&'static str),
-
-    /// General error (owned string).
-    GeneralBuf(String),
+    rows: Vec<Record>,
 }
 
-impl Error
+impl<Record: Clone> DataFrame<Record>
 {
-    /// Convert self into a Result::Err.
-    pub fn err<T>(self) -> Result<T>
-    {
-        Err(self)
-    }
-
-    pub fn print(&self)
-    {
-        println!("{:?}", self);
-    }
-}
-
-/// Result type.
-pub type Result<T> = ::std::result::Result<T, Error>;
-
-impl DataFrame
-{
-    /// Create a new DataFrame.
+    /// Create an empty dataframe.
     pub fn new() -> Self
-    {
-        Self::default()
-    }
-
-    /// Checks that this dataframe and `other` are compatible for `cbind`.
-    fn cbind_ck(&self, other: &DataFrame) -> Result<()>
-    {
-        if self.nrow != other.nrow
-        {
-            return Error::General("Cannot cbind dataframes with differing number of rows.").err();
-        }
-
-        for key in other.columns.keys()
-        {
-            if self.columns.contains_key(key)
-            {
-                // TODO suggest to user to use `join` instead.
-                return Error::General("Cannot cbind dataframes with conflicting column names.").err();
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Concatenate columns of two dataframes.
-    pub fn cbind(&self, other: &DataFrame) -> Result<Self>
-    {
-        self.cbind_ck(other)?;
-
-        let mut result = DataFrame::new();
-        result.nrow = self.nrow;
-
-        for (key, val) in self.columns.iter()
-        {
-            result.columns.insert(key.clone(), val.clone());
-        }
-
-        for (key, val) in other.columns.iter()
-        {
-            result.columns.insert(key.clone(), val.clone());
-        }
-
-        Ok(result)
-    }
-
-    /// Concatenate other dataframe onto `self`.
-    pub fn cbind_mut(&mut self, other: &DataFrame) -> Result<&mut Self>
-    {
-        self.cbind_ck(other)?;
-
-        // not sure if this will actually help at all but whatever.
-        self.columns.reserve(other.columns.len());
-
-        for (key, val) in other.columns.iter()
-        {
-            self.columns.insert(key.clone(), val.clone());
-        }
-
-        Ok(self)
-    }
-
-    fn rbind_ck_base(a: &DataFrame, b: &DataFrame) -> Result<()>
-    {
-        for key in a.columns.keys()
-        {
-            if !b.columns.contains_key(key)
-            {
-                return ErrorString::from("Column `")
-                    .p(key)
-                    .p("` is present in self but not in other")
-                    .err();
-            }
-
-            use self::Column::*;
-            match (&a.columns[key], &b.columns[key])
-            {
-                (&Float(_) , &Float(_))  => continue,
-                (&Double(_), &Double(_)) => continue,
-                (&Factor(_), &Factor(_)) => continue,
-                (&Bool(_)  , &Bool(_))   => continue,
-
-                _ => return ErrorString::new()
-                    .p("Column `")
-                    .p(key)
-                    .p("` is a `")
-                    .p(a.columns[key].variant_str())
-                    .p("` in self, but a `")
-                    .p(b.columns[key].variant_str())
-                    .p("` in other.")
-                    .err()
-            }
-        }
-
-        Ok(())
-    }
-
-    fn rbind_ck(&self, other: &DataFrame) -> Result<()>
-    {
-        DataFrame::rbind_ck_base(self, other)?;
-        DataFrame::rbind_ck_base(other, self)?;
-
-        // should always succeed
-        assert!(self.columns.len() == other.columns.len());
-
-        Ok(())
-    }
-
-    /// Concatenate rows of two dataframes.
-    pub fn rbind(&self, other: &DataFrame) -> Result<Self>
-    {
-        self.rbind_ck(other)?;
-
-        let mut result = DataFrame::new();
-        result.nrow = self.nrow + other.nrow;
-
-        for (key, val) in self.columns.iter()
-        {
-            let mut vec: Column = val.clone();
-
-            use self::Column::*;
-            match (&mut vec, &other.columns[key]) 
-            {
-                (&mut Float(ref mut v) , Float(ref o))  => v.extend(o.iter()),
-                (&mut Double(ref mut v), Double(ref o)) => v.extend(o.iter()),
-                (&mut Factor(ref mut v), Factor(ref o)) => v.extend(o.iter().cloned()),
-                (&mut Bool(ref mut v)  , Bool(ref o))   => v.extend(o.iter()),
-
-                // rbind_ck already checked that this is not the case.
-                _ => panic!("invalid rbind"),
-            }
-
-            result.columns.insert(key.clone(), vec);
-        }
-
-        Ok(result)
-    }
-
-    /// Concatenate rows of other onto self.
-    pub fn rbind_mut(&mut self, other: &DataFrame) -> Result<&mut Self>
-    {
-        self.rbind_ck(other)?;
-
-        for (key, val) in self.columns.iter_mut()
-        {
-            use self::Column::*;
-            match (val, &other.columns[key]) 
-            {
-                (Float(ref mut v) , &Float(ref o))  => v.extend(o.iter()),
-                (Double(ref mut v), &Double(ref o)) => v.extend(o.iter()),
-                (Factor(ref mut v), &Factor(ref o)) => v.extend(o.iter().cloned()),
-                (Bool(ref mut v)  , &Bool(ref o))   => v.extend(o.iter()),
-
-                // rbind_ck already checked that this is not the case.
-                _ => panic!("invalid rbind"),
-            }
-        }
-
-        self.nrow += other.nrow;
-        Ok(self)
-    }
-
-    fn select_ck(&self, columns: &[&str]) -> Result<()>
-    {
-        for col in columns
-        {
-            if !self.columns.contains_key(*col)
-            {
-                return ErrorString::from("Column `").p(col).p("` is not present in dataframe.").err();
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Return a new dataframe with a subset of the columns in `self`.
-    pub fn select(&self, columns: &[&str]) -> Result<Self>
-    {
-        self.select_ck(columns)?;
-
-        let mut result = Self::default();
-        for col in columns
-        {
-            result.columns.insert(col.to_string(), self.columns[*col].clone());
-        }
-
-        result.nrow = self.nrow;
-        Ok(result)
-    }
-
-    /// Remove columns from `self` that are not in `columns`.
-    pub fn select_mut(&mut self, columns: &[&str]) -> Result<&mut Self>
-    {
-        self.select_ck(columns)?;
-
-        for col in columns
-        {
-            self.columns.remove(*col);
-        }
-
-        Ok(self)
-    }
-
-    /// Create a new dataframe with columns which satisfy the predicate.
-    pub fn filter<F: FnOnce(DfToken) -> bool>(&self, p: F) -> Result<Self>
-    {
-        ErrorString::from("unimplemented").err()
-    }
-}
-
-impl Default for DataFrame
-{
-    fn default() -> Self
     {
         Self
         {
-            columns: HashMap::default(),
-            nrow: 0 as usize,
+            rows: Vec::new(),
+        }
+    }
+
+    /// Construct dataframe with the constructor.
+    pub fn with<C: Fn() -> DataFrame<Record>>(ctor: C) -> Self
+    {
+        ctor()
+    }
+
+    /// Return subset of the columns in `self`.
+    pub fn select
+        <NewRecord: Clone,
+        Selector: Fn(Record) -> NewRecord>
+        (&self, s: Selector) -> DataFrame<NewRecord>
+    {
+        DataFrame
+        {
+            rows: self.rows.iter().cloned().map(s).collect()
+        }
+    }
+
+    /// Return subset of rows in `self` which satisfy predicate against `other`.
+    pub fn lookup
+        <OtherRecord: Clone,
+        Predicate: Fn(&Record, &OtherRecord) -> bool>
+        (&self, other: &DataFrame<OtherRecord>, p: Predicate) -> DataFrame<Record>
+    {
+        DataFrame
+        {
+            rows: self.rows.iter()
+                .zip(other.rows.iter())
+                .filter_map(|(s,o)|
+                {
+                    if p(s, o) { Some(s.clone()) }
+                    else { None }
+                })
+                .collect()
+        }
+    }
+
+    /// Same as `lookup`, but additionally, perform an operation to produce
+    /// the new rows.
+    pub fn lookup_then<OtherRecord, NewRecord, Predicate, Operation>
+    (
+        &self,
+        other: &DataFrame<OtherRecord>,
+        p: Predicate,
+        op: Operation
+    ) -> DataFrame<NewRecord>
+    where
+        OtherRecord: Clone,
+        NewRecord:   Clone,
+        Predicate:   Fn(&Record, &OtherRecord) -> bool,
+        Operation:   Fn(&Record, &OtherRecord) -> NewRecord,
+    {
+        DataFrame
+        {
+            rows: self.rows.iter()
+                .zip(other.rows.iter())
+                .filter_map(|(s,o)|
+                {
+                    if p(s, o) { Some(op(s, o)) }
+                    else { None }
+                })
+                .collect()
+        }
+    }
+
+    /// Return subset of rows in `other` which satisfy predicate against `self`.
+    pub fn reverse_lookup
+        <OtherRecord: Clone,
+        Predicate: Fn(&OtherRecord, &Record) -> bool>
+        (&self, other: &DataFrame<OtherRecord>, p: Predicate) -> DataFrame<OtherRecord>
+    {
+        other.lookup(self, p)
+    }
+
+    /// Create or alter records using `Op`.
+    pub fn mutate<NewRecord: Clone, Op: Fn(Record) -> NewRecord>
+        (&self, op: Op) -> DataFrame<NewRecord>
+    {
+        DataFrame
+        {
+            rows: self.rows.iter().cloned().map(op).collect()
+        }
+    }
+
+    /// Return subset of rows that satisfy predicate.
+    pub fn filter<Predicate: Fn(&Record) -> bool>(&self, p: Predicate) -> DataFrame<Record>
+    {
+        DataFrame
+        {
+            rows: self.rows.iter().filter(|&i| p(i)).cloned().collect()
         }
     }
 }
 
-pub mod error_string
+impl<Record: Clone> Extend<Record> for DataFrame<Record>
 {
-    use super::*;
-
-    pub struct ErrorString
+    fn extend<T: IntoIterator<Item=Record>>(&mut self, iter: T)
     {
-        s: String
-    }
-
-    impl ErrorString
-    {
-        pub fn new() -> Self
+        for item in iter.into_iter()
         {
-            Self
-            {
-                s: String::new(),
-            }
-        }
-
-        /// `p`, short for `paste`. Extends string with the argument.
-        pub fn p(mut self, ss: &str) -> Self
-        {
-            self.s.extend(ss.chars());
-            self
-        }
-
-        /// Convert self into Result::Err
-        pub fn err<T>(self) -> Result<T>
-        {
-            Error::GeneralBuf(self.s).err()
+            self.rows.push(item);
         }
     }
+}
 
-    impl Default for ErrorString
+#[cfg(test)]
+mod test
+{
+    #[test]
+    fn test()
     {
-        fn default() -> Self
+        #[derive(Debug, Clone)]
+        struct Record
         {
-            Self
-            {
-                s: String::default(),
-            }
+            id: usize,
+            foo: f32,
+            name: String,
         }
-    }
 
-    impl Into<String> for ErrorString
-    {
-        fn into(self) -> String
-        {
-            self.s
-        }
-    }
+        type DataFrame = super::DataFrame<Record>;
 
-    impl From<String> for ErrorString
-    {
-        fn from(s: String) -> Self
-        {
-            Self
-            {
-                s
-            }
-        }
-    }
+        let mut df = DataFrame::new();
+        df.extend([
+            Record { id: 32 as usize, foo: 3.43, name: "name".to_string() },
+            Record { id: 1  as usize, foo: 6.54, name: "nrme".to_string() },
+            Record { id: 2  as usize, foo: 9.66, name: "nlme".to_string() },
+            Record { id: 3  as usize, foo: 0.25, name: "nfme".to_string() },
+            Record { id: 4  as usize, foo: 2.29, name: "naoe".to_string() },
+            Record { id: 5  as usize, foo: 1.74, name: "nase".to_string() },
+            Record { id: 6  as usize, foo: 5.49, name: "name".to_string() },
+            Record { id: 7  as usize, foo: 6.30, name: "naye".to_string() },
+            Record { id: 8  as usize, foo: 7.72, name: "nace".to_string() },
+            Record { id: 11 as usize, foo: 8.81, name: "name".to_string() },
+            Record { id: 21 as usize, foo: 9.96, name: "nvme".to_string() }
+        ].into_iter().cloned());
 
-    impl<'a> From<&'a str> for ErrorString
-    {
-        fn from(ss: &'a str) -> Self
-        {
-            Self
-            {
-                s: String::from(ss)
-            }
-        }
-    }
+        println!("{:?}", df);
 
-    impl Into<Error> for ErrorString
-    {
-        fn into(self) -> Error
-        {
-            Error::GeneralBuf(self.s)
-        }
+        println!("{:?}", df.mutate(|mut r| { r.foo = 2.0*r.foo; r }))
     }
 }
 
