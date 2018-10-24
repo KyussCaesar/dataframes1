@@ -1,0 +1,139 @@
+what would be neat:
+
+    - familiar feeling to working with dataframes/tibbles in R.
+    - but make use of compiler type-checking where possible.
+
+important invariants
+
+    - all columns are the same length
+    - all rows are the same length
+
+R functions I care about
+
+    - select
+    - mutate
+    - gather
+    - spread
+    - group_by
+    - summarise
+    - filter
+    - rbind
+    - cbind
+
+# `select`: Returns a new dataframe with only the columns specified.
+
+Accepts a dataframe with some columns, returns a dataframe with a subset of those
+columns.
+
+## Invariants:
+
+Input and output have same number of rows.
+Columns in output are subset of columns in input.
+
+
+# `mutate`: Add or modify columns in dataframe.
+
+## Invariants:
+
+Input and output have same number of rows.
+Columns in output are superset of the columns in the input.
+
+
+# `gather`: Collect multiple columns into key-value pairs.
+
+In other words, convert from "wide" format into "long" format.
+
+## Invariants:
+
+If an operation collapses C columns of a dataframe that has N rows, the output
+will have NC rows.
+
+
+# `spread`: Opposite of gather.
+
+Arguments are "id", "key" and "value".
+Result creates a new column for each level in "key", for each "id".
+
+## Invariants:
+
+
+# `group_by`: Group by levels of a factor.
+
+## Invariants:
+
+Grouping by a factor with M levels results in M groups.
+
+
+# `summarise`: Reduce over groups.
+
+## Invariants:
+
+For a dataframe that was grouped by a factor with M levels, the dataframe resulting
+from this operation will have M rows.
+
+
+# `filter`: Return rows which satisfy a predicate.
+
+## Invariants:
+
+The rows in the result are a subset of the rows in the input.
+The columns in the output are the same as those in the input.
+
+
+# `rbind`: Concatenate rows of two dataframes.
+
+## Invariants:
+
+The columns in both arguments must be the same.
+For inputs with M and N rows, the output will have M+N rows.
+
+
+# `cbind`: Concatenate columns of two dataframes.
+
+## Invariants:
+
+The number of rows in both arguments must be the same.
+The number of rows in the output is the same the number of rows in the input.
+For inputs with M and N columns, the output will have M+N columns.
+
+
+# Dynamic vs Static
+
+Would be nice to catch as many things at compile-time as is possible.
+Imagine if you had this code running in a container somewhere, you just throw data
+at it and expect it not to fail.
+
+Will probably have to trade-off somewhere.
+For example; can define custom types, which means accessing a non-existent column
+is a compile-error, but then you cannot add columns without defining a new type for
+it.
+
+Possibly, you could use macros to make this a bit less tedious.
+For example, what about a macro which wraps a struct definition, and results
+in defining a dataframe type?
+
+On the other hand, you could implement DataFrame like a hashmap between column
+names (String) and a Vec<T>. This allows dynamically adding and removing columns, 
+as well as renaming them, but at the expense of loosing compile-time checking for
+things like non-existent columns.
+
+I had imagined that the thing I evenually design would be aimed at people who
+already know the computation they want to do, so the columns required would
+essentially be static.
+
+Something that would be annoying would be generating an intermediate type for
+every intermediate value.
+Possible intermediate is to make columns Option<Column>, and leave room for
+future expansion.
+For example, if you add some columns, make the dataframe type
+
+    struct DataFrame
+    {
+        a: Column<A>,
+        b: Option<Column<B>>,
+    }
+
+Accessing a column which does not exist becomes compile-time error, but accessing
+a column before it is initialised would still be a runtime-error.
+Maybe this isn't really much better :\
+
