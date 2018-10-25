@@ -11,7 +11,6 @@ use rayon::prelude::*;
 /// DataFrame type.
 ///
 /// Holds a collection of your `Records`.
-#[derive(Debug)]
 pub struct DataFrame<Record: Clone + Send + Sync>
 {
     rows: Vec<Record>,
@@ -221,6 +220,21 @@ impl<Record: Clone + Send + Sync> Extend<Record> for DataFrame<Record>
     }
 }
 
+use std::fmt;
+impl<Record: Clone + Send + Sync + fmt::Debug> fmt::Debug for DataFrame<Record>
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result
+    {
+        write!(f, "DataFrame with {} records\n", self.rows.len())?;
+        for row in self.rows.iter()
+        {
+            write!(f, "{:?}\n", row)?;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test
 {
@@ -281,6 +295,19 @@ mod test
             val: i32,
         }
 
+        impl From<Record> for RecordOut
+        {
+            fn from(r: Record) -> Self
+            {
+                Self
+                {
+                    id: r.id,
+                    key: r.key.unwrap(),
+                    val: r.val.unwrap(),
+                }
+            }
+        }
+
         type DataFrame = super::DataFrame<Record>;
 
         let mut df = DataFrame::new();
@@ -315,7 +342,7 @@ mod test
         }
 
         println!("{:?}", df);
-        println!("{:?}", df.gather(gather!(key, val, bar, baz, qux)));
+        println!("{:?}", df.gather(gather!(key, val, bar, baz, qux)).transform(RecordOut::from));
     }
 }
 
