@@ -1,22 +1,31 @@
 extern crate csv;
 extern crate serde;
+extern crate prettytable;
+extern crate rayon;
 
 #[macro_use]
 extern crate serde_derive;
 
-extern crate rayon;
-
 use rayon::prelude::*;
+
+pub mod traits
+{
+    pub trait ThreadSafe: Send + Sync {}
+    impl<T: Send + Sync> ThreadSafe for T {}
+
+    pub trait Record<'a>: Clone + ThreadSafe + serde::Serialize + serde::Deserialize<'a> {}
+    impl<'a, T: Clone + ThreadSafe + serde::Serialize + serde::Deserialize<'a>> Record<'a> for T {}
+}
 
 /// DataFrame type.
 ///
 /// Holds a collection of your `Records`.
-pub struct DataFrame<Record: Clone + Send + Sync>
+pub struct DataFrame<'a, Record: traits::Record<'a>>
 {
     rows: Vec<Record>,
 }
 
-impl<Record: Clone + Send + Sync> DataFrame<Record>
+impl<Record: traits::Record<'a>> DataFrame<Record>
 {
     /// Create an empty dataframe.
     pub fn new() -> Self
@@ -56,11 +65,11 @@ impl<Record: Clone + Send + Sync> DataFrame<Record>
         default: Default
     ) -> DataFrame<NewRecord>
     where
-        OtherRecord: Clone + Send + Sync,
-        NewRecord:   Clone + Send + Sync,
-        Predicate:   Send + Sync + Fn(&Record, &OtherRecord) -> bool,
-        Operation:   Send + Sync + Fn(&Record, &OtherRecord) -> NewRecord,
-        Default:     Send + Sync + Fn() -> NewRecord
+        OtherRecord: traits::Record<'a>,
+        NewRecord:   traits::Record<'a>,
+        Predicate:   traits::ThreadSafe + Fn(&Record, &OtherRecord) -> bool,
+        Operation:   traits::ThreadSafe + Fn(&Record, &OtherRecord) -> NewRecord,
+        Default:     traits::ThreadSafe + Fn() -> NewRecord
     {
         DataFrame
         {
@@ -207,9 +216,15 @@ impl<Record: Clone + Send + Sync> DataFrame<Record>
             rows: self.rows.par_iter().filter(|&i| p(i)).cloned().collect()
         }
     }
+
+    /// Appends the record to the end of this dataframe.
+    pub fn push(&mut self, r: Record)
+    {
+        self.rows.push(r);
+    }
 }
 
-impl<Record: Clone + Send + Sync> Extend<Record> for DataFrame<Record>
+impl<Record: traits::Record<'a>> Extend<Record> for DataFrame<Record>
 {
     fn extend<T: IntoIterator<Item=Record>>(&mut self, iter: T)
     {
@@ -221,17 +236,40 @@ impl<Record: Clone + Send + Sync> Extend<Record> for DataFrame<Record>
 }
 
 use std::fmt;
-impl<Record: Clone + Send + Sync + fmt::Debug> fmt::Debug for DataFrame<Record>
+impl<Record: traits::Record<'a>> fmt::Debug for DataFrame<Record>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result
     {
-        write!(f, "DataFrame with {} records\n", self.rows.len())?;
-        for row in self.rows.iter()
+        let mut wtr = csv::Writer::from_writer(vec![]);
+        println!("DataFrame with {} records", self.rows.len());
+        for rec in self.rows.iter()
         {
-            write!(f, "{:?}\n", row)?;
+            wtr.serialize(rec.clone())?;
         }
 
+        let table_s = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
+        let table = prettytable::Table::from_csv_string(&table_s).unwrap();
+
+        table.printstd();
+
         Ok(())
+    }
+}
+
+/// Populates the required argument for `gather`.
+macro_rules! gather
+{
+    ($key:ident, $val:ident, $( $col:ident ),*) =>
+    {
+        (
+            |r| vec![ $( (stringify!($col), r.$col) ),* ].into_iter(),
+            |r,cn,val|
+            {
+                $( r.$col = None; )*
+                r.$key = Some(cn);
+                r.$val = val;
+            }
+        )
     }
 }
 
@@ -325,24 +363,50 @@ mod test
             Record { id: 21 as usize , bar: Some(26206), baz: Some(5959) , qux: Some(9391) , key: None, val: None }
         ].into_iter().cloned());
 
-        macro_rules! gather
-        {
-            ($key:ident, $val:ident, $( $col:ident ),*) =>
-            {
-                (
-                    |r| vec![ $( (stringify!($col), r.$col) ),* ].into_iter(),
-                    |r,cn,val|
-                    {
-                        $( r.$col = None; )*
-                        r.$key = Some(cn);
-                        r.$val = val;
-                    }
-                )
-            }
-        }
-
         println!("{:?}", df);
         println!("{:?}", df.gather(gather!(key, val, bar, baz, qux)).transform(RecordOut::from));
+    }
+
+    use csv;
+    use std;
+    use prettytable;
+
+    #[test]
+    fn csv_test_print() -> csv::Result<()>
+    {
+        #[derive(Clone, Debug, Serialize, Deserialize)]
+        struct Record
+        {
+            sepal_length : f32,
+            sepal_width  : f32,
+            petal_length : f32,
+            petal_width  : f32,
+            class        : String,
+        }
+
+        type DataFrame = super::DataFrame<Record>;
+
+        let mut rdr = csv::Reader::from_path("tests/iris.csv")?;
+        let mut df = DataFrame::new();
+        for result in rdr.deserialize()
+        {
+            let record: Record = result?;
+            df.push(record);
+        }
+
+        let mut wtr = csv::Writer::from_writer(vec![]);
+        println!("DataFrame with {} records", df.rows.len());
+        for rec in df.rows.iter()
+        {
+            wtr.serialize(rec.clone())?;
+        }
+
+        let table_s = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
+        let table = prettytable::Table::from_csv_string(&table_s).unwrap();
+
+        table.printstd();
+
+        Ok(())
     }
 }
 

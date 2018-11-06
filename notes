@@ -137,3 +137,7 @@ Accessing a column which does not exist becomes compile-time error, but accessin
 a column before it is initialised would still be a runtime-error.
 Maybe this isn't really much better :\
 
+---
+
+Yeah nah don't make everything have to be deserialise and stuff because then
+lifetimes spew everywhere, just have the function handle it.
