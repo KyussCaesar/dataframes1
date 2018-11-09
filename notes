@@ -139,5 +139,189 @@ Maybe this isn't really much better :\
 
 ---
 
-Yeah nah don't make everything have to be deserialise and stuff because then
-lifetimes spew everywhere, just have the function handle it.
+one, general-purpose `pipe` function, and macros which populate it with the correct
+arguments.
+
+---
+
+would be nice to find some way of automatically generating the intermediate types.
+macros would be able to do this.
+
+could perhaps return struct of closures.... no that won't work, still need to
+know the type of the value coming in.
+
+would be cool if rust allowed type inference on struct definition for stuff like
+this.
+
+what would be perfect would be tuples with named fields.
+
+what about struct around a tuple, and a mapping between 'static str <=> number in tuple
+
+might be able to use enums to provide semi-dynamic typing
+
+build an enum that knows about a bunch of types, and a generic constructor which
+is specialised for each type, returning a different variant depending on the type?
+
+inside macro expansion, create new type:
+
+struct NewRecord
+{
+    $($item: TypeWrapper),*
+}
+
+where
+
+enum TypeWrapper
+{
+    Type(val)....
+}
+
+impl Into<TypeWrapper> for EACH_T
+{
+    fn into(self)
+    {
+        TypeWrapper::EACH_T_VARIANT(self)
+    }
+}
+
+select!(a, b, c) ->
+|r|
+{
+    struct NewRecord
+    {
+        a: TypeWrapper,
+        b: TypeWrapper,
+        c: TypeWrapper,
+    }
+
+    NewRecord { a: r.a.into(), b: r.b.into(), c: r.c.into() }
+}
+
+add `DataFrame::pipe` as a generic method which accepts some kind of weird thing
+and a specifier for the op; use macros to fill arguments
+
+...almost, but now everything after this point is dynamically typed
+
+could enforce the definition of a type alias for each field in the record,
+then you can talk about the type of field `foo` by ::foo
+
+could use a proc macro to do the above, replace
+
+    struct Record
+    {
+        foo: f32,
+    }
+
+with
+
+    type foo = f32;
+    struct Record
+    {
+        foo: ::foo;
+    }
+
+don't necessarily need to replace type definition
+
+with this, macro can expand to
+
+|r|
+{
+    struct NewRecord
+    {
+        $($id : ::$id),*
+    }
+
+    NewRecord { $($id),* }
+}
+
+e.g select!(a, b, c)
+
+    struct NewRecord
+    {
+        a: ::a,
+        b: ::b,
+        c: ::c,
+    }
+
+    NewRecord { a, b, c }
+
+Might not work because of macro hygeine, instead, define and impl a custom
+trait which has an associated type?
+
+struct Record
+{
+    a: f32,
+    b: usize,
+}
+
+macro would define trait
+
+pub trait __Record_Trait
+{
+    type a_t;
+    type b_t;
+}
+
+impl __Record_Trait for Record
+{
+    type a_t = f32;
+    type b_t = usize;
+}
+
+in other macros, can refer to this type as
+
+<Record as __Record_Trait>::a_t
+
+for a, and likewise for b.
+
+less flexible, try aliases first; this method doesn't work after one `select` because
+you have no way to talk about the type, and therefore to retrieve the type of
+it's fields.
+
+check if this works
+
+fn makes<a_T, b_T, c_T, d_T, T>(a: A, b: B, c: C, d: D) -> (Fn(A, B, C, D) -> T)
+{
+    struct NewType
+    {
+        a: A,
+        b: B,
+        c: C,
+        d: D,
+    }
+
+    return |aa, bb, cc, dd| NewType { a: aa, b: bb, c: cc, d: dd }
+}
+
+if so, then make a macro which expands to this function, and then you can use
+it to create value of your new type
+
+even simpler would be
+
+macro_rules! makes
+{
+    ( $($item:ident),* ) =>
+    {
+        fn makes_new<F>() -> F
+        {
+            // define new type
+            struct NewType
+            {
+                $($item : $item_T),*
+            }
+
+            // define function which stamps out values of that new type and return it
+            return |$($item),*| NewType { $($item),* }
+        }
+
+        // create function which creates values of the new type and yield as
+        // result of macro invocation
+        makes_new()
+    }
+}
+
+doesn't work; you can't leak type from the function
+
+---
+
+what about something similar to the iterator adapters?
